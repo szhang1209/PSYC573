@@ -1,0 +1,167 @@
+---
+title: "PSYC573 Final"
+author: "Sherry Zhang"
+date: "4/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-pkg, message = FALSE, warning=FALSE}
+library(ggplot2)  # for plots
+library(magrittr)  # for `%>%` operator
+library(here)
+library(readxl)  # for reading excel files
+library(modelsummary)  # for summarizing data
+library(rstan)
+rstan_options(auto_write = TRUE)  # save compiled STAN object
+library(posterior)
+library(bayesplot)
+library(brms)
+library(dplyr)
+library(splines)
+```
+
+
+## Research Question
+Does the type and polarity of a distractor (mask) affect recognition of a target letter when flashed quickly across a monitor?
+
+## Description of each variable in your preliminary analysis
+
+Contrast: The brightness of the mask, compared to the letters. Ranges from twice as bright to .2 times as bright as the letters. Light-colored masks are on the negative scale, while dark-colored masks were on the positive scale.
+
+Mask type:
+1-strip of masking (covers a small portion of the monitor) that does not overlap with the target
+0-full field (covers entire monitor) of masking that overlaps with target
+
+Accuracy: Overall accuracy across subjects for each condition.
+
+## Mathematical expressions of your model and priors
+Let $C$ = contrast, $M$ = Mask Type
+
+Model:
+$$
+  \begin{aligned}
+    A_i & \sim N(\mu_i, \sigma) \\
+    \mu_i & = \beta_0+\beta_1C_i+\beta_2M_i+\beta_3C_i\times M_i
+  \end{aligned}
+$$
+
+Prior:
+$$
+  \begin{aligned}
+    \beta_0 & \sim N(0, 5) \\
+    \beta_1 & \sim N(0, 5) \\
+    \beta_2 & \sim N(0, 1) \\
+    \beta_3 & \sim N(0, 2) \\
+    \sigma & \sim t_4^+(0, 3) \\
+    X & \sim I(abs(C))
+  \end{aligned}
+$$
+
+##Your code for running the Bayesian analyses
+```{r}
+#reading in data
+hw9 <- read_excel(file.choose())
+```
+
+```{r}
+hw9$mask <- factor(hw9$mask,
+    levels = c(1, 0),
+    labels = c("strip", "fullfield")
+)
+```
+
+Models for different mask types:
+```{r, results = "hide"}
+m_strip <-
+    brm(accuracy ~ contrast,
+        data = filter(hw9, mask == "strip"),
+        prior = prior(normal(0, 5), class = "b") +
+            prior(normal(0, 1), class = "Intercept") +
+            prior(student_t(4, 0, 3), class = "sigma"),
+        seed = 941,
+        iter = 4000
+    )
+m_fullfield <-
+    brm(accuracy ~ contrast,
+        data = filter(hw9, mask == "fullfield"),
+        prior = prior(normal(0, 5), class = "b") +
+            prior(normal(0, 2), class = "Intercept") +
+            prior(student_t(4, 0, 3), class = "sigma"),
+        seed = 2157,
+        iter = 4000
+    )
+```
+
+```{r}
+msummary(list(mask = m_strip, `fullfield` = m_fullfield),
+         estimate = "{estimate} [{conf.low}, {conf.high}]",
+         statistic = NULL, fmt = 2,
+         gof_omit = "^(?!Num)"
+)
+```
+
+Interaction model:
+```{r}
+get_prior(accuracy ~ contrast + mask,
+    data = hw9,
+    family = gaussian(link = "identity"))
+get_prior(accuracy ~ contrast,
+    data = hw9,
+    family = gaussian(link = "identity"))
+```
+
+```{r, results = "hide"}
+m_int <- brm(
+    accuracy ~ mask + bs(contrast, degree = 1, knots = 0),
+    data = hw9,
+    prior = 
+        prior(student_t(3, 0.6, 2.5), class = "Intercept") +
+        prior(student_t(3, 0, 2.5), class = "sigma"),
+    seed = 941,
+    iter = 4000
+)
+```
+
+```{r}
+m_int
+```
+
+##A convergence check of MCMC
+```{r}
+mcmc_trace(m_int)
+summarize_draws(m_int)
+```
+
+##A table and/or a figure showing the posterior distributions of the key model parameters
+
+```{r summ-m1}
+summ_m_int <- as_draws_df(m_int) %>%
+    summarise_draws()
+knitr::kable(summ_m_int, digits = 2)
+```
+
+```{r}
+plot(
+    conditional_effects(m_int),
+    points = TRUE,
+    point_args = list(height = 0.01, width = 0.05, alpha = 0.05)
+)
+```
+
+```{r}
+ggplot(hw9,
+       aes(x = contrast, y = accuracy, col = mask)) +
+    geom_point() +
+    geom_smooth() +
+    labs(x = "Relative Contrast",
+         y = "Accuracy",
+         title = "Stratified Analysis of Mask Type and Accuracy")
+```
+
+```{r}
+pp_check(m_int, type = "dens_overlay_grouped", group = "mask")
+```
